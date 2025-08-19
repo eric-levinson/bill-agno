@@ -1,0 +1,78 @@
+import asyncio
+from textwrap import dedent
+
+from agno.agent import Agent
+from agno.models.openai import OpenAIChat
+from agno.tools.mcp import MCPTools
+from gridiron_toolkit.info import GridironTools
+
+# MCP server
+server_url = "http://192.168.68.66:8000/mcp/"
+
+    # keep only the player info related tools
+    #mcp_tools.functions = {
+    #    k: v for k, v in getattr(mcp_tools, "functions", {}).items()
+    #    if k in {"get_player_info_tool","get_players_by_sleeper_id_tool","get_metrics_metadata","get_advanced_receiving_stats","get_advanced_passing_stats","get_advanced_rushing_stats","get_advanced_defense_stats","get_advanced_receiving_stats_weekly","get_advanced_passing_stats_weekly","get_advanced_rushing_stats_weekly","get_advanced_defense_stats_weekly"}
+    #}
+
+async def run_agent(message: str) -> None:
+    # Initialize and connect MCP tools
+    mcp_tools = MCPTools(transport="streamable-http", url=server_url)
+    await mcp_tools.connect()
+    print("Received MCP tools:", mcp_tools)
+
+    analytics_mcp = MCPTools(
+        transport="streamable-http",
+        url=server_url,
+        include_tools=[
+            "get_player_info_tool",
+            "get_players_by_sleeper_id_tool",
+            "get_metrics_metadata",
+            "get_advanced_receiving_stats",
+            "get_advanced_passing_stats",
+            "get_advanced_rushing_stats",
+            "get_advanced_defense_stats",
+            "get_advanced_receiving_stats_weekly",
+            "get_advanced_passing_stats_weekly",
+            "get_advanced_rushing_stats_weekly",
+            "get_advanced_defense_stats_weekly",
+        ],
+    )
+    await analytics_mcp.connect()
+
+    try:
+        # Agent using the analytics MCP tools
+        agent = Agent(
+            model=OpenAIChat(id="gpt-4o"),
+            description="You make complex analytics questions simple by breaking down information, researching and formatting results in an easy to understand way.",
+            instructions=[
+                "Use the tools available to you to gather information to answer questions. Provide charts and table to show data and explain your reasoning thoughtfully."
+            ],
+            show_tool_calls=True,
+            markdown=True,
+            tools=[GridironTools(include_tools=["get_player_info_tool",
+            "get_metrics_metadata",
+            "get_advanced_receiving_stats",
+            "get_advanced_passing_stats",
+            "get_advanced_rushing_stats",
+            "get_advanced_defense_stats",
+            "get_advanced_receiving_stats_weekly",
+            "get_advanced_passing_stats_weekly",
+            "get_advanced_rushing_stats_weekly",
+            "get_advanced_defense_stats_weekly"])],
+        )
+
+        await agent.aprint_response(message, stream=True)
+    finally:
+        # ensure both MCP connections are closed cleanly (ignore errors during shutdown)
+        try:
+            await analytics_mcp.close()
+        except Exception:
+            pass
+        try:
+            await mcp_tools.close()
+        except Exception:
+            pass
+
+if __name__ == "__main__":
+    asyncio.run(run_agent("Compare the advanced receiving stats of Nico Collins, CeeDee Lamb, and Puka Nacua from the 2023 season onward. Show me their volume metrics like targets and receptions, efficiency metrics like catch percentage and RACR, and situational stats such as yards after catch (YAC). Also, highlight who leads in fantasy points per reception (PPR) among these three."))
