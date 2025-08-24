@@ -15,9 +15,27 @@ from agno.app.discord import DiscordClient
 from agno.tools.reasoning import ReasoningTools
 from gridiron_toolkit.info import GridironTools
 from agno.tools.duckduckgo import DuckDuckGoTools
+from agno.tools.googlesearch import GoogleSearchTools
+from agno.tools.crawl4ai import Crawl4aiTools
+
+from agno.memory.v2.memory import Memory
+from agno.memory.v2.db.postgres import PostgresMemoryDb 
+from agno.storage.postgres import PostgresStorage
+
 
 # MCP server
 server_url = "http://192.168.68.66:8000/mcp/"
+# Database URL
+db_url = os.getenv("db_url") or os.getenv("DB_URL")
+if not db_url:
+    raise RuntimeError("Database password not found in environment variable 'db_url'")
+
+memory_db = PostgresMemoryDb(table_name="memory", db_url=db_url)
+storage_db = PostgresStorage(table_name="session_storage", db_url=db_url)
+
+
+#print db_url
+#print(db_url)
 
 # keep only the player info related tools
 # mcp_tools.functions = {
@@ -30,9 +48,15 @@ def build_team() -> Team:
     
     web_agent = Agent(
         name="Web Search Agent",
-        model=OpenAIChat(id="gpt-4o"),
+        model=OpenAIChat(id="gpt-5-mini"),
         role="Handle web search requests",
-        tools=[ReasoningTools(add_instructions=True), DuckDuckGoTools()],
+        tools=[#ReasoningTools(add_instructions=True), 
+               GoogleSearchTools(),
+               #DuckDuckGoTools(), 
+               Crawl4aiTools()
+        ],
+        tool_call_limit=12,
+        memory=Memory(db=memory_db, debug_mode=True),
         add_datetime_to_instructions=True,
         timezone_identifier="Etc/UTC",
         instructions=dedent(
@@ -41,22 +65,28 @@ def build_team() -> Team:
 
             You are a web search specialist.
 
-            ---
-
-            ## Workflow
-
+            Workflow
+            - If the user provides one or more URL(s), DO NOT perform a web search. Use Crawl4aiTools to crawl the provided URL(s) and extract relevant content directly.
+            - If the user does NOT provide URL(s), first use GoogleSearchTools to find the most relevant pages. Then use Crawl4aiTools to crawl the selected search results and extract the content.
             - Always read and follow each tool’s description and parameter documentation.
-            - If you are unsure about a query, ask for clarification.
-            - Present findings in a clear and concise manner.
+            - When crawling, prefer pages that directly answer the user's question and collect only the necessary content to answer concisely.
+            - If multiple URLs or results are available, crawl the top N (default 3) or ask the user which sources to prioritize when necessary.
+            - Ask for clarification if the user's query or URLs are ambiguous.
+            - Present findings with a brief summary, followed by key extracted facts and a short list of source URLs.
 
-            ---
+            Tools usage
+            - Crawl4aiTools: use for extracting page content when a URL is available or after search results are selected.
+            - GoogleSearchTools: use only when no URLs are supplied by the user.
 
-            ## Available Tools
+            Response format
+            1. One-line topline summary.
+            2. Concise bullet points of findings.
+            3. Source list (URLs) and, if helpful, short excerpts wrapped in code fences.
 
-            **DuckDuckGoTools**  
-            Use this tool to perform web searches and retrieve information from the internet.
+            Examples
+            - User gives URLs: crawl those URLs with Crawl4aiTools and summarize.
+            - User asks a general question: run GoogleSearchTools, pick top results, crawl them with Crawl4aiTools, then summarize.
 
-            ---
             """
         ),
     )
@@ -64,9 +94,9 @@ def build_team() -> Team:
     # Agent using the analytics MCP tools
     analytics_agent = Agent(
         name="Analytics Agent",
-        model=OpenAIChat(id="gpt-4o"),
+        model=OpenAIChat(id="gpt-5-mini"),
         description="You make complex analytics questions simple by breaking down information, researching and formatting results in an easy to understand way.",
-        tools=[ReasoningTools(add_instructions=True),
+        tools=[#ReasoningTools(add_instructions=True),
             GridironTools(
                 url=server_url,
                 include_tools=[
@@ -131,53 +161,67 @@ def build_team() -> Team:
 
             **get_advanced_receiving_stats**  
             Fetch advanced seasonal receiving stats for NFL players.  
-            Parameters: `player_names`, `season_list`, `metrics`
+            Parameters: `player_names` (optional), `season_list` (optional), `metrics` (optional), `order_by_metric` (optional), `limit` (optional), `positions` (optional)
 
             **get_advanced_passing_stats**  
             Fetch advanced seasonal passing stats for NFL quarterbacks and passers.  
-            Parameters: `player_names`, `season_list`, `metrics`
+            Parameters: `player_names` (optional), `season_list` (optional), `metrics` (optional), `order_by_metric` (optional), `limit` (optional), `positions` (optional)
 
             **get_advanced_rushing_stats**  
             Fetch advanced seasonal rushing stats for NFL running backs and runners.  
-            Parameters: `player_names`, `season_list`, `metrics`
+            Parameters: `player_names` (optional), `season_list` (optional), `metrics` (optional), `order_by_metric` (optional), `limit` (optional), `positions` (optional)
 
             **get_advanced_defense_stats**  
             Fetch advanced seasonal defensive stats for NFL defenders.  
-            Parameters: `player_names`, `season_list`, `metrics`
+            Parameters: `player_names` (optional), `season_list` (optional), `metrics` (optional), `order_by_metric` (optional), `limit` (optional), `positions` (optional)
 
             **get_advanced_receiving_stats_weekly**  
             Fetch advanced weekly receiving stats for NFL players.  
-            Parameters: `player_names`, `season_list`, `weekly_list`, `metrics`
+            Parameters: `player_names` (optional), `season_list` (optional), `weekly_list` (optional), `metrics` (optional), `order_by_metric` (optional), `limit` (optional), `positions` (optional)
 
             **get_advanced_passing_stats_weekly**  
             Fetch advanced weekly passing stats for NFL quarterbacks and passers.  
-            Parameters: `player_names`, `season_list`, `weekly_list`, `metrics`
+            Parameters: `player_names` (optional), `season_list` (optional), `weekly_list` (optional), `metrics` (optional), `order_by_metric` (optional), `limit` (optional), `positions` (optional)
 
             **get_advanced_rushing_stats_weekly**  
             Fetch advanced weekly rushing stats for NFL running backs and runners.  
-            Parameters: `player_names`, `season_list`, `weekly_list`, `metrics`
+            Parameters: `player_names` (optional), `season_list` (optional), `weekly_list` (optional), `metrics` (optional), `order_by_metric` (optional), `limit` (optional), `positions` (optional)
 
             **get_advanced_defense_stats_weekly**  
             Fetch advanced weekly defensive stats for NFL defenders.  
-            Parameters: `player_names`, `season_list`, `weekly_list`, `metrics`
+            Parameters: `player_names` (optional), `season_list` (optional), `weekly_list` (optional), `metrics` (optional), `order_by_metric` (optional), `limit` (optional), `positions` (optional)
 
             ---
 
             ## When Calling Analytics Tools
 
-            - Always pass all relevant player names as a **single array** in the `player_names` parameter.  
-            Example:  
+            - Always pass all relevant player names as a single array in the `player_names` parameter.
+            Example:
                 ["Derrick Henry", "Saquon Barkley", "Bijan Robinson"]
 
-            - Use the `season_list` parameter to specify all seasons to include.  
-            Example:  
+            - Use the `season_list` parameter to specify seasons for seasonal tools. For weekly tools include `weekly_list` to target specific weeks.
+            Example:
                 [2023, 2024]
 
-            - Pass all requested metrics as a **single array** in the `metrics` parameter.  
-            Example:  
+            - Pass all requested metrics as a single array in the `metrics` parameter. Validate metric names first by calling `get_metrics_metadata(category=...)`.
+            Example:
                 ["carries", "rushing_yards", "rushing_epa", "brk_tkl"]
 
-            - Make **a single tool call per query**, not one per player or metric.
+            - Use `order_by_metric` to request server-side sorting (DESC). Only pass a column that is included in the returned `metrics`/base columns.
+
+            - Use `limit` to cap rows returned. Default limit for the analytics tools is 100 (server-side caps may still apply). If you need more rows, request a higher limit but be mindful of caps.
+
+            - Use `positions` to restrict by roster position (e.g., ["RB","WR","QB"]). Tool defaults:
+            - receiving: ['WR','TE','RB']
+            - passing: ['QB']
+            - rushing: ['RB','QB']
+            - defense: ['CB','DB','DE','DL','LB','S']
+
+            - For weekly queries include `weekly_list` alongside `season_list` to fetch specific game weeks.
+
+            - Make a single tool call per user query (one call that contains arrays for players, seasons, and metrics), not one call per player or metric.
+
+            - When uncertain about available metrics, call `get_metrics_metadata(category=...)` before requesting metrics. 
 
             ---
 
@@ -208,6 +252,7 @@ def build_team() -> Team:
             - **Never hallucinate or assume metric names.**
             """
         ),
+        memory=Memory(db=memory_db, debug_mode=True),
         show_tool_calls=True,
         markdown=True,
         debug_mode=True,
@@ -218,9 +263,10 @@ def build_team() -> Team:
 
     fantasy_agent = Agent(
         name="Fantasy Agent",
-        model=OpenAIChat(id="gpt-4o"),
+        model=OpenAIChat(id="gpt-5-mini"),
         description="You are a fantasy football expert specializing in Sleeper leagues. You provide insights, player information, and league details using the tools available to you.",
-        tools=[GridironTools(
+        tools=[#ReasoningTools(add_instructions=True),
+            GridironTools(
             url=server_url,
             include_tools=[
                 "get_player_info_tool",
@@ -233,9 +279,15 @@ def build_team() -> Team:
                 "get_sleeper_user_drafts",
                 "get_players_by_sleeper_id_tool",
                 "get_fantasy_rank_page_types",
-                "get_fantasy_ranks" 
+                "get_fantasy_ranks",
+                "get_sleeper_league_users",
+                "get_sleeper_league_by_id",
+                "get_sleeper_draft_by_id",
+                "get_sleeper_all_draft_picks_by_id"
             ]
         )],
+        memory=Memory(db=memory_db, debug_mode=True),
+        #storage=storage_db,
         add_datetime_to_instructions=True,
         timezone_identifier="Etc/UTC",
         instructions=dedent(
@@ -324,16 +376,19 @@ def build_team() -> Team:
             ---
 
             ### 6) get_sleeper_trending_players
-            **Purpose:** Trending adds or drops across Sleeper.  
-            **Inputs:**  
-            - `sport` *(default "nfl")*  
-            - `add_drop` *("add" | "drop", required)*  
-            - `hours` *(default 24)*  
-            - `limit` *(default 25)*  
+            Purpose:
+            - Trending adds or drops across Sleeper.
 
-            **Rules:**  
-            - Require `add_drop`; ask if missing.  
-            - Use defaults unless otherwise requested.
+            Inputs:
+            - `sport` *(default "nfl")*  
+            - `add_drop` *("add" | "drop", default "add")*  
+            - `hours` *(default 24)*  
+            - `limit` *(default 25)*
+
+            Rules:
+            - `add_drop` has a default of `"add"` per the registered function; ask the user if they have a preference and pass it when provided.  
+            - Use defaults unless otherwise requested.  
+            - Validate `add_drop` is either `"add"` or `"drop"` before calling.
 
             ---
 
@@ -348,6 +403,8 @@ def build_team() -> Team:
             - Always pass `username`.  
             - Keep defaults unless overridden.
 
+            ---
+
             ### 8) get_players_by_sleeper_id_tool
             **Purpose:** Get player objects by their Sleeper IDs.  
             **Inputs:**  
@@ -355,6 +412,8 @@ def build_team() -> Team:
 
             **Rules:**  
             - Always pass `sleeper_ids` as an array.
+
+            ---
 
             ### 9) get_fantasy_rank_page_types
             **Purpose:** Return distinct `page_type` values from `vw_dynasty_ranks` for UI filters.  
@@ -365,6 +424,8 @@ def build_team() -> Team:
             - Surface RPC/database errors to the Supervisor.  
             - Don’t hardcode values; always use the returned list.
 
+            ---
+
             ### 10) get_fantasy_ranks
             **Purpose:** Fetch dynasty ranks with optional `position`/`page_type` filters and a `limit`.  
             **Inputs:** `position` *(optional)*, `page_type` *(optional)*, `limit` *(optional, default 30)*
@@ -373,6 +434,42 @@ def build_team() -> Team:
             - Validate `page_type` via `get_fantasy_rank_page_types` before calling.  
             - Pass `limit` when the user wants more/less rows; server caps protect against huge responses.  
             - Return a short summary and top N rows; expand only on request.
+
+            ---
+
+            ### 11) get_sleeper_league_by_id
+            **Purpose:** Retrieve full league metadata (basic info, `scoring_settings`, league `settings`, `roster_positions`).
+            **Inputs:** `league_id` *(required)*
+
+            **Rules:**
+            - Always pass `league_id` (non-empty string).
+            - Use returned `scoring_settings`, `settings`, and `roster_positions` to interpret roster and scoring data.
+            - Summarize key fields (season, scoring format, roster counts) — request expanded fields only if explicitly needed.
+            - If the tool returns an error payload, stop and surface the error with a short suggested next step.
+
+            ---
+
+            ### 12) get_sleeper_draft_by_id
+            **Purpose:** Get draft-level info: draft metadata, participants, and draft settings for a given draft.
+            **Inputs:** `draft_id` *(required)*
+
+            **Rules:**
+            - Always pass `draft_id` (non-empty string).
+            - Use returned participant list and draft settings to validate pick ownership and draft configuration.
+            - Summarize participants and draft type; fetch picks separately with `get_sleeper_all_draft_picks_by_id`.
+            - Handle missing or partial participant data safely and surface errors to the Supervisor.
+
+            ---
+
+            ### 13) get_sleeper_all_draft_picks_by_id
+            **Purpose:** Return all draft picks for a given draft (full pick list).
+            **Inputs:** `draft_id` *(required)*
+
+            **Rules:**
+            - Always pass `draft_id` (non-empty string).
+            - Return complete pick list; summarize by round, overall pick, and team owner for topline results.
+            - Preserve original pick ordering; when summarizing, group by round and show top N picks unless full list is requested.
+            - Handle empty or null pick lists gracefully and surface errors from the tool to the Supervisor.
 
             ---
 
@@ -433,6 +530,22 @@ def build_team() -> Team:
             Call:
             `get_fantasy_ranks(position="RB", page_type="redraft-overall", limit=50)`
 
+            **J) Get sleeper league users**
+            Call:
+            `get_sleeper_league_users(league_id="123456789012345678")`
+
+            **K) Get sleeper league by ID**
+            Call:
+            `get_sleeper_league_by_id(league_id="123456789012345678")`
+
+            **L) Get sleeper draft by ID**
+            Call:
+            `get_sleeper_draft_by_id(draft_id="123456789012345678")`
+
+            **M) Get sleeper draft picks by ID**
+            Call:
+            `get_sleeper_all_draft_picks_by_id(draft_id="123456789012345678")`
+
             ---
 
             ## Summary
@@ -452,7 +565,7 @@ def build_team() -> Team:
     gridiron_team = Team(
     name="Gridiron Ball Squad (BiLL)",
     mode="coordinate",
-    model=OpenAIChat("gpt-4o"),
+    model=OpenAIChat("gpt-5-mini"),
     members=[fantasy_agent, analytics_agent, web_agent],
     instructions=dedent(
         """
@@ -477,6 +590,7 @@ def build_team() -> Team:
         Data & Presentation
         - Return a 1–2 line topline summary, a compact table/markdown block, then optional details.
         - Prefer visual summaries (tables, simple ASCII charts) for comparisons.
+            - Surround tables and charts with triple backticks (```) for clarity.
         - Always explain key takeaways and next steps.
 
         Error handling
@@ -503,10 +617,12 @@ def build_team() -> Team:
     tools=[
         GridironTools(url=server_url, include_tools=["get_player_info_tool"])
     ],
-    
+    storage=storage_db,
+    memory=Memory(db=memory_db, debug_mode=True),
+    #enable_agentic_memory=True,
     add_history_to_messages=True,
     add_datetime_to_instructions=True,
-    num_history_runs=5,
+    num_history_runs=3,
     markdown=True,
     debug_mode=True,
     show_members_responses=True,
