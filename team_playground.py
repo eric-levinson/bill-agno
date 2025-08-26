@@ -23,6 +23,16 @@ from agno.playground import Playground
 from agno.memory.v2.memory import Memory
 from agno.memory.v2.db.postgres import PostgresMemoryDb 
 from agno.storage.postgres import PostgresStorage
+from phoenix.otel import register
+
+# Set the local collector endpoint
+os.environ["PHOENIX_COLLECTOR_ENDPOINT"] = "http://192.168.68.66:6006"
+
+# Configure the Phoenix tracer
+tracer_provider = register(
+    project_name="gridiron-agno-playground",  # Default is 'default'
+    auto_instrument=True,  # Automatically use the installed OpenInference instrumentation
+)
 
 
 # MCP server
@@ -52,7 +62,7 @@ def build_team() -> Team:
     
     web_agent = Agent(
         name="Web Search Agent",
-        model=OpenAIChat(id="gpt-5-mini"),
+        model=OpenAIChat(id="gpt-4.1-mini"),
         role="Handle web search requests",
         tools=[#ReasoningTools(add_instructions=True), 
                GoogleSearchTools(),
@@ -272,7 +282,7 @@ def build_team() -> Team:
 
     fantasy_agent = Agent(
         name="Fantasy Agent",
-        model=OpenAIChat(id="gpt-5-mini"),
+        model=OpenAIChat(id="gpt-4.1-mini"),
         description="You are a fantasy football expert specializing in Sleeper leagues. You provide insights, player information, and league details using the tools available to you.",
         tools=[#ReasoningTools(add_instructions=True),
             GridironTools(
