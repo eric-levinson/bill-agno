@@ -21,7 +21,16 @@ from agno.tools.crawl4ai import Crawl4aiTools
 from agno.memory.v2.memory import Memory
 from agno.memory.v2.db.postgres import PostgresMemoryDb 
 from agno.storage.postgres import PostgresStorage
+from phoenix.otel import register
 
+# Set the local collector endpoint
+os.environ["PHOENIX_COLLECTOR_ENDPOINT"] = "http://192.168.68.66:6006"
+
+# Configure the Phoenix tracer
+tracer_provider = register(
+    project_name="gridiron-agno",  # Default is 'default'
+    auto_instrument=True,  # Automatically use the installed OpenInference instrumentation
+)
 
 # MCP server
 server_url = "http://192.168.68.66:8000/mcp/"
