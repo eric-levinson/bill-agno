@@ -29,6 +29,9 @@ ALL_TOOL_NAMES = [
     "get_fantasy_rank_page_types",
     "get_fantasy_ranks",
     "get_dictionary_info",
+    "get_stats_metadata",
+    "get_offensive_players_game_stats",
+    "get_defensive_players_game_stats",
 ]
 
 

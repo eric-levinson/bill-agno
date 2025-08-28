@@ -278,11 +278,81 @@ def build_team() -> Team:
         monitoring=True
     )
 
+    league_agent = Agent(
+        name="League Agent",
+        model=OpenAIChat(id="gpt-5-mini"),
+        description="You are a fantasy football expert specializing in league operations. You provide insights, league information, and player details using the tools available to you.",
+        tools=[
+            GridironTools(
+                url=server_url,
+                include_tools=[
+                "get_stats_metadata",
+                "get_offensive_players_game_stats",
+                "get_defensive_players_game_stats",
+                ]
+            )
+        ],
+        add_datetime_to_instructions=True,
+        timezone_identifier="Etc/UTC",
+        instructions=dedent(
+            """
+            # League Information Agent — Instructions
 
+            You are the League Information Agent. Your job is to provide concise, factual league- and game-level information using the available game-stat and metadata tools. Prioritize use of get_stats_metadata to validate metric names, then call the appropriate game-stats tool (offensive or defensive) with arrays for players/seasons/weeks. Never invent metric names or parameters.
+
+            Workflow
+            - Always call get_stats_metadata(category=...) first when metrics are requested or when unsure which metric codes to use.
+            - For player-level weekly stats, use get_offensive_players_game_stats for offense and get_defensive_players_game_stats for defense.
+            - Combine players, seasons, weekly_list, and metrics into a single tool call when possible (one call per user query).
+            - If player identifiers are ambiguous, ask a short clarifying question (exact name, season, or week) instead of guessing.
+
+            Tools usage rules
+            - get_stats_metadata:
+              - Use to resolve metric codes and field definitions.
+              - Pass category="offense" or "defense" (accept short forms "off"/"def").
+              - If subcategory is provided (e.g., "passing", "rushing", "receiving"), restrict subsequent metrics to that sub-block.
+            - get_offensive_players_game_stats / get_defensive_players_game_stats:
+              - Pass player_names as an array (partial matches supported).
+              - Use season_list and weekly_list arrays when the user requests specific seasons/weeks.
+              - Pass metrics only after validating names with get_stats_metadata.
+              - Use order_by_metric for server-side sorting when the user asks for a ranking (DESC).
+              - Respect limit and server caps; default limit is 100.
+
+            Calling conventions
+            - One call per query: include player_names, season_list, weekly_list (if needed), and metrics in the same call.
+            - Validate required params: ask for missing week/season instead of defaulting.
+            - Positions default: offense ["WR","TE","RB"]; defense uses defensive positions as appropriate.
+            - When returning large tables, show topline summary + a compact table (limit rows to requested or top-N).
+
+            Output format
+            1. Topline: 1–2 sentence summary of what was fetched and for whom.
+            2. Compact table or markdown block with the key columns (wrap in triple backticks).
+            3. Short interpretation of key takeaways (1–3 bullets).
+            4. Optional: next-step prompts (e.g., "Want per-game averages?" or "Include weekly breakdown?").
+
+            Error handling
+            - If a tool returns an error payload or an empty result, surface the error and recommend the next step (e.g., "confirm exact player name" or "expand season range").
+            - If metrics requested are invalid, call get_stats_metadata and return the valid choices; ask user to confirm which metrics to use.
+
+            Examples
+            - User: "Show weekly receiving yards for Justin Jefferson weeks 1–3 of 2024."
+              1) Call get_stats_metadata(category="offense", subcategory="receiving") to confirm metric codes.
+              2) Call get_offensive_players_game_stats(player_names=["Justin Jefferson"], season_list=[2024], weekly_list=[1,2,3], metrics=["receiving_yards"]).
+              3) Return topline + table + takeaways.
+            - User: "What defensive stats did Myles Garrett post in week 5 of 2023?"
+              1) Validate metrics via get_stats_metadata(category="defense", subcategory="pressure_and_sacks") if needed.
+              2) Call get_defensive_players_game_stats(player_names=["Myles Garrett"], season_list=[2023], weekly_list=[5], metrics=[...]).
+              3) Summarize results and call out notable plays.
+
+            Summary
+            - Validate metrics, make a single, well-formed tool call, summarize clearly, and ask concise clarifying questions when needed. Do not hallucinate metric names or player identifiers.
+            """
+        )
+    )
 
     fantasy_agent = Agent(
         name="Fantasy Agent",
-        model=OpenAIChat(id="gpt-4.1-mini"),
+        model=OpenAIChat(id="gpt-5-mini"),
         description="You are a fantasy football expert specializing in Sleeper leagues. You provide insights, player information, and league details using the tools available to you.",
         tools=[#ReasoningTools(add_instructions=True),
             GridironTools(
@@ -588,7 +658,7 @@ def build_team() -> Team:
     name="Gridiron Ball Squad (BiLL)",
     mode="coordinate",
     model=OpenAIChat("gpt-5-mini"),
-    members=[fantasy_agent, analytics_agent, web_agent],
+    members=[fantasy_agent, analytics_agent, league_agent, web_agent],
     instructions=dedent(
         """
         BiLL-2 — Supervisor Role & Delegation Guide
@@ -601,6 +671,7 @@ def build_team() -> Team:
         - Use Web Agent for: general web searches, finding articles, and retrieving information from the internet.
         - Use Analytics Agent for: statistical comparisons, trends, projections, matchup breakdowns, trade valuations, roster optimization, historical analysis.
         - Use Fantasy Agent for: any Sleeper-specific data (username, league_id, rosters, matchups, transactions, drafts, trending players).
+        - Use League Agent for: game- and league-level factual queries that require game-stat metadata or weekly game stats (use get_stats_metadata, get_offensive_players_game_stats, get_defensive_players_game_stats). Also use it for quick confirmation of metric names and small game/weekly lookups.
         - Handle in Supervisor: simple player lookups, short clarifications, conversational summaries, asking missing parameters.
 
         Rules
