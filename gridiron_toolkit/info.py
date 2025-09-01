@@ -47,7 +47,7 @@ class GridironTools(Toolkit):
 
     def __init__(
         self,
-        url: str = "http://192.168.68.66:8000/mcp/",
+        url: str = "http://192.168.68.66:8002/mcp/",
         transport: str = "streamable-http",
         include_tools: Optional[List[str]] = None,
         exclude_tools: Optional[List[str]] = None,
