@@ -6,6 +6,7 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"), overrid
 
 import asyncio
 import inspect
+import functools
 from textwrap import dedent
 
 from agno.agent import Agent
@@ -17,6 +18,9 @@ from gridiron_toolkit.info import GridironTools
 from agno.tools.duckduckgo import DuckDuckGoTools
 from agno.tools.googlesearch import GoogleSearchTools
 from agno.tools.crawl4ai import Crawl4aiTools
+from agno.playground import Playground
+from agno.app.fastapi.app import FastAPIApp
+from agno.app.agui.app import AGUIApp
 
 from agno.memory.v2.memory import Memory
 from agno.memory.v2.db.postgres import PostgresMemoryDb 
@@ -28,9 +32,10 @@ os.environ["PHOENIX_COLLECTOR_ENDPOINT"] = "http://192.168.68.66:6006"
 
 # Configure the Phoenix tracer
 tracer_provider = register(
-    project_name="gridiron-agno",  # Default is 'default'
+    project_name="gridiron-agno-agui",  # Default is 'default'
     auto_instrument=True,  # Automatically use the installed OpenInference instrumentation
 )
+
 
 # MCP server
 server_url = "http://192.168.68.66:8002/mcp/"
@@ -40,7 +45,9 @@ if not db_url:
     raise RuntimeError("Database password not found in environment variable 'db_url'")
 
 memory_db = PostgresMemoryDb(table_name="memory", db_url=db_url)
-storage_db = PostgresStorage(table_name="session_storage", db_url=db_url)
+storage_db = PostgresStorage(table_name="session_storage", db_url=db_url, mode='team')#, auto_upgrade_schema=True)
+#storage_db.upgrade_schema()
+
 
 
 #print db_url
@@ -59,10 +66,9 @@ def build_team() -> Team:
         name="Web Search Agent",
         model=OpenAIChat(id="gpt-4.1-mini"),
         role="Handle web search requests",
-        tools=[#ReasoningTools(add_instructions=True), 
+        tools=[ReasoningTools(add_instructions=True), 
                GoogleSearchTools(),
-               #DuckDuckGoTools(), 
-               Crawl4aiTools()
+               Crawl4aiTools(max_length=750),
         ],
         tool_call_limit=12,
         #memory=Memory(db=memory_db, debug_mode=True),
@@ -281,7 +287,6 @@ def build_team() -> Team:
             GridironTools(
                 url=server_url,
                 include_tools=[
-                "get_player_info_tool",
                 "get_stats_metadata",
                 "get_offensive_players_game_stats",
                 "get_defensive_players_game_stats",
@@ -652,6 +657,7 @@ def build_team() -> Team:
     
     gridiron_team = Team(
     name="Gridiron Ball Squad (BiLL)",
+    team_id="gridiron_team",
     mode="coordinate",
     model=OpenAIChat("gpt-5-mini"),
     members=[fantasy_agent, analytics_agent, league_agent, web_agent],
@@ -753,22 +759,173 @@ async def _run_discord():
             asyncio.set_event_loop(None)
         except Exception:
             pass
-
-if __name__ == "__main__":
-    # ensure DISCORD_BOT_TOKEN is set in env before running
+        
+async def _run_playground():
+    team = build_team()
+    playground_app = Playground(teams=[team])
+    serve = getattr(playground_app, "serve", None)
+    # obtain the FastAPI app instance to pass directly to uvicorn (avoids import-by-string)
     try:
-        asyncio.run(_run_discord())
-    except KeyboardInterrupt:
-        # polite shutdown message; _run_discord finally-block will run on cancellation
-        print("Interrupted by user (Ctrl+C). Shutting down...")
+        app_obj = playground_app.get_app(use_async=True, prefix="/v1")
+    except Exception:
+        app_obj = None
+    try:
+        if inspect.iscoroutinefunction(serve):
+            # run the async serve as a task so we can cancel it on SIGINT
+            serve_task = asyncio.create_task(serve(app_obj or "playground:app", reload=False))
+            await serve_task
+        else:
+            # run blocking serve in a thread/executor so the event loop can handle signals
+            loop = asyncio.get_running_loop()
+            # don't enable the uvicorn reloader when running in an executor (it uses signals
+            # which only work in the main thread). Run without reload here; use reload when
+            # serve is async and run directly.
+            serve_call = functools.partial(serve, app_obj or "playground:app", reload=False)
+            serve_future = loop.run_in_executor(None, serve_call)
+            await serve_future
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        print("Interrupted by user (Ctrl+C). Shutting down playground...")
+    finally:
+        # best-effort close of any toolkit instances attached to team members or team.tools
+        for member in getattr(team, "members", []) or []:
+            for t in getattr(member, "tools", []) or []:
+                close = getattr(t, "close", None)
+                if close:
+                    if asyncio.iscoroutinefunction(close):
+                        try:
+                            await close()
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            loop = asyncio.get_running_loop()
+                            await loop.run_in_executor(None, close)
+                        except Exception:
+                            pass
+        for t in getattr(team, "tools", []) or []:
+            close = getattr(t, "close", None)
+            if close:
+                if asyncio.iscoroutinefunction(close):
+                    try:
+                        await close()
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        loop = asyncio.get_running_loop()
+                        await loop.run_in_executor(None, close)
+                    except Exception:
+                        pass
+
+        # try to close the playground app itself if it exposes a close/stop method
+        pclose = getattr(playground_app, "close", None)
+        if pclose:
+            if asyncio.iscoroutinefunction(pclose):
+                try:
+                    await pclose()
+                except Exception:
+                    pass
+            else:
+                try:
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, pclose)
+                except Exception:
+                    pass
+        try:
+            asyncio.set_event_loop(None)
+        except Exception:
+            pass
+
+# Async router by default (use_async=True)
+#fastapi_app = FastAPIApp(
+#    agents=[basic_agent],
+#    name="Basic Agent",
+#    app_id="basic_agent",
+#    description="A basic agent that can answer questions and help with tasks.",
+#)
+#
+#app = fastapi_app.get_app()
+#
+## For synchronous router:
+## app = fastapi_app.get_app(use_async=False)
+#
+#if __name__ == "__main__":
+#    fastapi_app.serve(app="basic:app", port=8001, reload=True)
+#
 
 #if __name__ == "__main__":
-#    asyncio.run(
-#        run_team(
-#            "Compare the advanced receiving stats of Nico Collins, CeeDee Lamb, and Puka Nacua from the 2023 and 2024 seasons. Show me their volume metrics like targets and receptions, efficiency metrics like catch percentage and RACR, and situational stats such as yards after catch (YAC). Also, highlight who leads in fantasy points per reception (PPR) among these three."
-#        )
-#    )
+#    try:
+#        asyncio.run(_run_playground())
+#    except KeyboardInterrupt:
+#        print("Interrupted by user (Ctrl+C). Shutting down...")
 
-#Can you give me some basic info about Josh Allen?
-#Compare the advanced receiving stats of Justin Jefferson and Ja'Marr Chase from the 2023 and 2024 seasons. Show me their volume, efficiency, and situational metrics like targets, receptions, RACR, yards after catch, and catch percentage. Also, if you can, highlight who had the edge in fantasy points per reception.
-#Compare the advanced receiving stats of Nico Collins, CeeDee Lamb, and Puka Nacua from the 2023 and 2024 seasons. Show me their volume metrics like targets and receptions, efficiency metrics like catch percentage and RACR, and situational stats such as yards after catch (YAC). Also, highlight who leads in fantasy points per reception (PPR) among these three.
+#async def _run_fastapi():
+#    team = build_team()
+#    fastapi_app = FastAPIApp(
+#        teams=[team],
+#        name="FastAPI App",
+#        app_id="fastapi_app",
+#        description="A FastAPI app for handling requests.",
+#    )
+#    app_obj = fastapi_app.get_app()
+#    # pass the actual ASGI app object to the serve call (avoid import-by-string errors)
+#    fastapi_app.serve(app=app_obj, port=8001, reload=True)
+#
+#
+#def create_app():
+#    """Create and return the ASGI app for uvi­corn import (module-level 'app')."""
+#    team = build_team()
+#    fastapi_app = FastAPIApp(
+#        teams=[team],
+#        name="FastAPI App",
+#        app_id="fastapi_app",
+#        description="A FastAPI app for handling requests.",
+#    )
+#    return fastapi_app.get_app()
+#
+#
+## Expose module-level ASGI app object so `python3 -m uvicorn bill_api:app` works
+#app = create_app()
+
+# Setup the AG-UI app
+#agui_app = AGUIApp(
+#    agent=agent,
+#    name="AG-UI Agno Agent",
+#    app_id="agno_agent",
+#)
+#app = agui_app.get_app()
+#agui_app.serve(app="agno_agent:app", port=8000, reload=True)
+
+
+async def _run_AGUI():
+    team = build_team()
+    agui_app = AGUIApp(
+        team=team,
+        name="BiLL",
+        app_id="bill_team",
+    )
+    app_obj = agui_app.get_app()
+    # pass actual ASGI app object to avoid import-by-string issues
+    agui_app.serve(app=app_obj, port=8001, reload=True)
+
+
+def create_app():
+    # create and return the ASGI app object for uvicorn import
+    team = build_team()
+    agui_app = AGUIApp(
+        team=team,
+        name="BiLL",
+        app_id="bill_team",
+    )
+    return agui_app.get_app()
+
+
+# Expose module-level ASGI app so `uvicorn bill_agui:app` works
+app = create_app()
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(_run_AGUI())
+    except KeyboardInterrupt:
+        print("Interrupted by user. Shutting down...")
